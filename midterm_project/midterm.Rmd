@@ -1,0 +1,358 @@
+---
+title: "Data Wrangling Midterm"
+author: "Max Bluestone"
+date: "10/22/2018"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+The libraries necessary:
+```{r libraries, message=F}
+library("tidyr")
+library("dplyr")
+library("sjlabelled")
+library("SASxport")
+```
+
+### Loading the data
+I loaded the DIQ data using the `SASxport` package, which reads XPT files into R, and then I took a quick look.
+```{r load}
+diq <- read.xport("DIQ_I.XPT")
+head(diq[,1:10])
+```
+
+### The data-related issues
+Based on inspection of the data set and reading the website information, the problems with the data are:
+
+- There are many missing values, so it is worth checking to see if any rows or columns entirely consist of NAs.
+- The column names of the data set are coded, and thus not very informative or intuitive when programming. Although the column names have informative attribute labels, the labels are not usable when programming. More informative nicknames for the columns will make the code using this data set more readable, adaptable, and reproducible.
+- Many of the data values are coded (e.g. 7 means 'Refused') and should be changed to the actual value (i.e. 'Refused' instead of 7).
+- Multiple columns include numeric ranges coded as a single value (e.g. 666 means 'Less Than One Year') and also specific numeric values. The values of the original column should be changed to the actual value (i.e. 'Less Than One Year' instead of 666) and kept, in case a researcher wishes to know about "Don't Know" counts or other categorical groupings, but it also is worth creating a new column that contains only integers for later potential numeric analyses (e.g. finding the mean).
+- A couple of pairs of columns (e.g. DID060 and DID060U) are amounts of time and then the matched unit of measure. These columns can be merged so that the time measures are in one column with the same unit of measure (i.e. all values are in months).
+- Columns DIQ175A to DIQ175X are all responses to the question regarding why the patient feels at risk for diabetes. These columns have different values indicating whether the option was chosen or not. Setting the values to 1 if chosen and NA if not will make programming easier.
+
+## Fixing the issues
+#### Missing Values
+First, I quickly ran a check to see if any rows or columns of the dataframe were entirely NAs. If this is the case then those rows or columns are useless, because they add no information to the dataset, and should be deleted. In this data set, there were no rows or columns that were empty.
+```{r check}
+# check every column, remove if all NAs
+if(any(colSums(is.na(diq))==nrow(diq))){
+  diq <- diq[,which(colSums(is.na(diq))<nrow(diq))]
+  print("Empty columns were removed.")
+} else {
+  print("There are no empty columns.")
+}
+
+# for rows subset from column 2 to end, every sample has sequence number 
+if(any(rowSums(is.na(diq[2:ncol(diq)]))==(ncol(diq)-1))){
+  diq <- diq[which(rowSums(is.na(diq))<ncol(diq))]
+  print("Empty rows were removed.")
+} else {
+  print("There are no empty rows.")
+}
+```
+
+#### Renaming column names
+To change the column names to more informative nicknames, I first had to remove the labels that were carried over from SAS. I was able to do this using `remove_all_labels` from the `sjlabelled` package. Then, I could change the column names. Now, when someone is looking at code that uses this data set, they won't have to go check to see what DIQ010 stands for.
+```{r colnames}
+clean_diq <- remove_all_labels(diq)
+colnames(clean_diq) <- c("RespondentSeqNum","DrTold","AgeFirstTold","EverToldPre",
+                    "EverToldHealthRisk","FeelAtRisk","FamilyHist","Overweight","Age",
+                    "PoorDiet","Race","HadBaby9lb","LackPhysActivity","HighBP","HighBloodSugar",
+                    "HighChol","Hypoglycemic","ExtremeHunger","HandFeetTinglingNumb","BlurredVision",
+                    "IncreasedFatigue","AnyoneCould","DocWarning","Other","Gestational",
+                    "FreqUrination","Thirst","CravingEatingSugar","Medication","PolycysticOvarianSyndrome",
+                    "BloodTestPast3Years","TakingInsulin","HowLongInsulin","HowLongInsulinMeasure",
+                    "TakingDiabeticPills","HowLongAgoSawSpecialist","SeeOneDr","DrVisitsPastYear",
+                    "CheckBloodFreq","CheckBloodFreqMeasure","DrCheckA1C","LastA1C",
+                    "DrRecA1C","RecentSBP","RecentDBP","DrRecSBP","DrRecDBP","RecentLDL",
+                    "DrRecLDL","DrFootSoreCheckPastYear","FootSoreCheckFreq","FootSoreCheckFreqMeasure",
+                    "LastTimePupilsDilated","EyesAffected")
+head(clean_diq[,1:10])
+```
+
+This could also be done using SQL, for example like so:
+```{sql, eval=F, echo=T}
+EXEC sp_rename 'diq.DIQ010', 'DoctorTold', 'COLUMN'
+```
+or the columns could be selected into a new table with new column names, for example like so:
+```{sql, eval=F, echo=T}
+select DIQ010 as DoctorTold from diq into clean_diq
+```
+
+#### Coded data values
+Where the columns of the data set have a simple code-value matching, I replaced the coded values with their string value equivalent. Now, when analyses need to be programmed or queries made, it will be easier to call and understand the string values.
+```{r first_mut}
+clean_diq <- clean_diq %>%
+  mutate(DrTold = case_when(DrTold == 1 ~ "Yes",
+                             DrTold == 2 ~ "No",
+                             DrTold == 3 ~ "Borderline",
+                             DrTold == 7 ~ "Refused",
+                             DrTold == 9 ~ "Don't know"),
+
+         EverToldPre = case_when(EverToldPre == 1 ~ "Yes",
+                                 EverToldPre == 2 ~ "No",
+                                 EverToldPre == 9 ~ "Don't know"),
+         
+         EverToldHealthRisk = case_when(EverToldHealthRisk == 1 ~ "Yes",
+                                        EverToldHealthRisk == 2 ~ "No",
+                                        EverToldHealthRisk == 9 ~ "Dont know"),
+
+         FeelAtRisk = case_when(FeelAtRisk == 1 ~ "Yes",
+                                FeelAtRisk == 2 ~ "No",
+                                FeelAtRisk == 7 ~ "Refused",
+                                FeelAtRisk == 9 ~ "Don't know"),
+         
+         BloodTestPast3Years = case_when(BloodTestPast3Years == 1 ~ "Yes",
+                                         BloodTestPast3Years == 2 ~ "No",
+                                         BloodTestPast3Years == 7 ~ "Refused",
+                                         BloodTestPast3Years == 9 ~ "Don't know"),
+         
+         TakingInsulin = case_when(TakingInsulin == 1 ~ "Yes",
+                                   TakingInsulin == 2 ~ "No",
+                                   TakingInsulin == 7 ~ "Refused",
+                                   TakingInsulin == 9 ~ "Don't know"),
+         
+         TakingDiabeticPills = case_when(TakingDiabeticPills == 1 ~ "Yes",
+                                         TakingDiabeticPills == 2 ~ "No",
+                                         TakingDiabeticPills == 7 ~ "Refused",
+                                         TakingDiabeticPills == 9 ~ "Don't know"),
+         
+         HowLongAgoSawSpecialist = case_when(HowLongAgoSawSpecialist == 1 ~ "1 year ago or less",
+                                             HowLongAgoSawSpecialist == 2 ~ "More than 1 year ago but no more than 2 years ago",
+                                             HowLongAgoSawSpecialist == 3 ~ "More than 2 years ago but no more than 5 years ago",
+                                             HowLongAgoSawSpecialist == 4 ~ "More than 5 years ago",
+                                             HowLongAgoSawSpecialist == 5 ~ "Never",
+                                             HowLongAgoSawSpecialist == 9 ~ "Don't know"),
+         
+         SeeOneDr = case_when(SeeOneDr == 1 ~ "Yes",
+                              SeeOneDr == 2 ~ "No"),
+         
+         DrCheckA1C = case_when(DrCheckA1C == 1 ~ "Yes",
+                                DrCheckA1C == 2 ~ "No",
+                                DrCheckA1C == 9 ~ "Don't know"),
+         
+         DrRecA1C = case_when(DrRecA1C == 1 ~ "Less than 6",
+                              DrRecA1C == 2 ~ "Less than 7",
+                              DrRecA1C == 3 ~ "Less than 8",
+                              DrRecA1C == 4 ~ "Less than 9",
+                              DrRecA1C == 5 ~ "Less than 10",
+                              DrRecA1C == 6 ~ "Provider did not specify goal",
+                              DrRecA1C == 77 ~ "Refused",
+                              DrRecA1C == 99 ~ "Don't know"),
+         
+         LastTimePupilsDilated = case_when(LastTimePupilsDilated == 1 ~ "Less than 1 month",
+                                          LastTimePupilsDilated == 2 ~ "1-12 months",
+                                          LastTimePupilsDilated == 3 ~ "13-24 months",
+                                          LastTimePupilsDilated == 4 ~ "Greater than 2 years",
+                                          LastTimePupilsDilated == 5 ~ "Never",
+                                          LastTimePupilsDilated == 7 ~ "Refused",
+                                          LastTimePupilsDilated == 9 ~ "Don't know"),
+         
+         EyesAffected = case_when(EyesAffected == 1 ~ "Yes",
+                                  EyesAffected == 2 ~ "No",
+                                  EyesAffected == 7 ~ "Refused",
+                                  EyesAffected == 9 ~ "Don't know")
+)
+
+# show first few rows
+head(clean_diq[,1:10])
+```
+
+This could also be done using SQL, for example like so:
+```{sql, eval=F, echo=T}
+update clean_diq
+set DrTold = "Yes"
+where DrTold = 1
+
+update clean_diq
+set DrTold = "No"
+where DrTold = 2
+
+update clean_diq
+set DrTold = "Borderline"
+where DrTold = 3
+
+update clean_diq
+set DrTold = "Refused"
+where DrTold = 7
+
+update clean_diq
+set DrTold = "Don't Know"
+where DrTold = 9
+```
+
+#### Cleaning the data
+The columns `DrVisitsPastYear`,`FootSoreCheckFreq`, and `HowLongInsulin` are mostly numeric except for 3, 5, and 2 "Don't know" responses, respectively, that are coded as 9999 or 999. These values preclude any numeric analysis, so it is worth making these NAs since the counts are so low.
+```{r}
+clean_diq <- clean_diq %>%
+  mutate(DrVisitsPastYear = ifelse(DrVisitsPastYear == 9999,NA,DrVisitsPastYear),
+         FootSoreCheckFreq = ifelse(FootSoreCheckFreq == 9999,NA,FootSoreCheckFreq),
+         HowLongInsulin = ifelse(HowLongInsulin == 999,NA,HowLongInsulin))
+```
+
+This could also be done using SQL, for example like so:
+```{sql, eval=F, echo=T}
+update clean_diq
+set DrVisitsPastYear = NULL
+where DrTold = 9999
+```
+
+For the columns that include ranges coded as a single character value and also specific age values as numerics, I replaced the coded values with their string value equivalent for the original column (e.g. AgeFirstTold), but I also created a new column that contains only integers for later potential numeric analyses (e.g. AgeFirstTold_Num). The numeric values in a categorical factor column won't do us any good, so I changed them to string labels of the ranges (e.g. "2-78").
+```{r, sec_mut}
+clean_diq <- clean_diq %>%
+  mutate(AgeFirstTold_Num = ifelse(AgeFirstTold == 666,0.5,
+                               ifelse(AgeFirstTold == 999,NA,AgeFirstTold)),
+         
+         AgeFirstTold = factor(ifelse(AgeFirstTold == 666,"Less Than 1 Year",
+                                      ifelse(AgeFirstTold == 999,"Don't know",
+                                             ifelse(AgeFirstTold == 80,"80 years or older",
+                                                    ifelse(is.na(AgeFirstTold),NA,"2-78"))))),
+         
+         LastA1C_Num = ifelse(LastA1C == 777,NA,
+                              ifelse(LastA1C == 999,NA,LastA1C)),
+         
+         LastA1C = factor(ifelse(LastA1C == 777,"Refused",
+                                      ifelse(LastA1C == 999,"Don't know",
+                                             ifelse(is.na(LastA1C),NA,"2-18.5")))),
+         
+         RecentSBP_Num = ifelse(RecentSBP == 7777,NA,
+                                ifelse(RecentSBP == 9999,NA,RecentSBP)),
+         
+         RecentSBP = factor(ifelse(RecentSBP == 7777,"Less Than 1 Year",
+                                      ifelse(RecentSBP == 9999,"Don't know",
+                                             ifelse(is.na(RecentSBP),NA,"80-201")))),
+         
+         RecentDBP_Num = ifelse(RecentDBP == 7777,NA,
+                                ifelse(RecentSBP == 9999,NA,RecentDBP)),
+         
+         RecentDBP = factor(ifelse(RecentDBP == 7777,"Less Than 1 Year",
+                                      ifelse(RecentDBP == 9999,"Don't know",
+                                             ifelse(is.na(RecentDBP),NA,"17-251")))),
+         
+         DrRecSBP_Num = ifelse(DrRecSBP == 6666,NA,
+                               ifelse(DrRecSBP == 7777,NA,
+                                      ifelse(DrRecSBP == 9999,NA,DrRecSBP))),
+         
+         DrRecSBP = factor(ifelse(DrRecSBP == 6666,"Provider did not specify goal",
+                                  ifelse(DrRecSBP == 7777,"Refused",
+                                         ifelse(DrRecSBP == 9999,"Don't know",
+                                             ifelse(is.na(DrRecSBP),NA,"80-175"))))),
+         
+         DrRecDBP_Num = ifelse(DrRecDBP == 6666,NA,
+                               ifelse(DrRecDBP == 7777,NA,
+                                      ifelse(DrRecDBP == 9999,NA,DrRecDBP))),
+         
+         DrRecDBP = factor(ifelse(DrRecDBP == 6666,"Provider did not specify goal",
+                                  ifelse(DrRecDBP == 7777,"Refused",
+                                         ifelse(DrRecDBP == 9999,"Don't know",
+                                             ifelse(is.na(DrRecDBP),NA,"18-140"))))),
+         
+         RecentLDL_Num = ifelse(RecentLDL == 5555,NA,
+                                ifelse(RecentLDL == 6666,NA,
+                                       ifelse(RecentLDL == 7777,NA,
+                                              ifelse(RecentLDL == 9999,NA,RecentLDL)))),
+         
+         RecentLDL = factor(ifelse(RecentLDL == 5555,"Never heard of LDL",
+                                   ifelse(6666,"Never had cholesterol test",
+                                          ifelse(RecentLDL == 7777,"Refused",
+                                                 ifelse(RecentLDL == 9999,"Don't know",
+                                                        ifelse(is.na(RecentLDL),NA,"4-520")))))),
+         
+         DrRecLDL_Num = ifelse(DrRecLDL == 6666,NA,
+                               ifelse(DrRecLDL == 7777,NA,
+                                      ifelse(DrRecLDL == 9999,NA,DrRecLDL))),
+         
+         DrRecLDL = factor(ifelse(DrRecLDL == 6666,"Provider did not specify goal",
+                                  ifelse(DrRecLDL == 7777,"Refused",
+                                         ifelse(DrRecLDL == 9999,"Don't know",
+                                                ifelse(is.na(DrRecLDL),NA,"6-205"))))),
+         
+         DrFootSoreCheckPastYear_Num = ifelse(DrFootSoreCheckPastYear == 7777,NA,
+                                          ifelse(DrFootSoreCheckPastYear == 9999,NA,DrFootSoreCheckPastYear)),
+         
+         DrFootSoreCheckPastYear = factor(ifelse(DrFootSoreCheckPastYear == 7777,"Refused",
+                                          ifelse(DrFootSoreCheckPastYear == 9999,"Don't know/not sure",
+                                          ifelse(DrFootSoreCheckPastYear == 0,"None",
+                                          ifelse(is.na(DrFootSoreCheckPastYear),NA,"1-34")))))
+  )
+
+# show first few rows
+head(clean_diq[c("AgeFirstTold","AgeFirstTold_Num","LastA1C","LastA1C_Num","RecentSBP","RecentSBP_Num","RecentDBP","RecentDBP_Num","RecentLDL","RecentLDL_Num","DrRecLDL","DrRecLDL_Num","DrFootSoreCheckPastYear","DrFootSoreCheckPastYear_Num")])
+```
+This could also be done using SQL, for example like so:
+```{sql, eval=F, echo=T}
+alter table clean_diq
+add AgeFirstTold_Num nvarchar(255)
+
+update clean_diq
+set AgeFirstTold_Num = AgeFirstTold
+
+update clean_diq
+set AgeFirstTold_Num = 0.5
+where AgeFirstTold_Num = 666
+
+update clean_diq
+set AgeFirstTold_Num = 999
+where AgeFirstTold_Num = NULL
+```
+
+For the paired columns that contain an amount of time and the time measurement, it makes sense to combine the columns and standardize the unit of time so comparisons can be made between patients. For example, if the unit of measure is months and I standardize the unit of time to years, then I can just multiple the values by 12.
+```{r, third_mut}
+clean_diq <- clean_diq %>%
+  mutate(MonthsTakingInsulin = ifelse(HowLongInsulinMeasure == 1,HowLongInsulin,
+                                      ifelse(HowLongInsulinMeasure == 2,HowLongInsulin*12,
+                                             ifelse(HowLongInsulin == 666,0.5,NA))),
+         
+         BloodCheckFreqPerYear = ifelse(CheckBloodFreqMeasure == 1,CheckBloodFreq*365,
+                                        ifelse(CheckBloodFreqMeasure == 2,CheckBloodFreq*52,
+                                               ifelse(CheckBloodFreqMeasure == 3,CheckBloodFreq*12,
+                                                      ifelse(CheckBloodFreqMeasure == 4,CheckBloodFreq,NA)))),
+         
+         FootCheckFreqPerYear = ifelse(FootSoreCheckFreqMeasure == 1,FootSoreCheckFreq*365,
+                                       ifelse(FootSoreCheckFreqMeasure == 2,FootSoreCheckFreq*52,
+                                              ifelse(FootSoreCheckFreqMeasure == 3,FootSoreCheckFreq*12,
+                                                     ifelse(FootSoreCheckFreqMeasure == 4,FootSoreCheckFreq,NA))))
+  )
+
+# show first few rows
+head(clean_diq[c("HowLongInsulin","HowLongInsulinMeasure","MonthsTakingInsulin","CheckBloodFreq","CheckBloodFreqMeasure","BloodCheckFreqPerYear","FootSoreCheckFreq","FootSoreCheckFreqMeasure","FootCheckFreqPerYear")])
+```
+
+Last, I changed the values in columns DIQ175A to DIQ175X to 1 if the response were chosen - basically if the value isn't NA.
+```{r}
+for (col in which(colnames(clean_diq)=="FamilyHist"):which(colnames(clean_diq)=="PolycysticOvarianSyndrome")){
+  for (row in 1:nrow(clean_diq)){
+    if(!is.na(clean_diq[row,col])){clean_diq[row,col] = 1}
+  }
+}
+```
+
+### Check the data
+Now, we can check to make sure the counts of the `clean_diq` data set match the ones one the website for various variables:
+```{sql, eval=F, echo=T}
+select DrTold, count(RespondentSeqNum) as Count from clean_diq
+group by DrTold
+```
+
+
+```{sql, eval=F, echo=T}
+select PoorDiet, count(RespondentSeqNum) as Count from clean_diq
+group by PoorDiet
+```
+
+
+```{sql, eval=F, echo=T}
+select HowLongAgoSawSpecialist, count(RespondentSeqNum) as Count from clean_diq
+group by HowLongAgoSawSpecialist
+```
+
+
+```{sql, eval=F, echo=T}
+select LastA1C, count(RespondentSeqNum) as Count from clean_diq
+group by LastA1C
+```
+

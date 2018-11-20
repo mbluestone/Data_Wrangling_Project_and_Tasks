@@ -1,0 +1,138 @@
+---
+title: "Data Wrangling HW3"
+author: "Max Bluestone"
+date: "11/7/2018"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Libraries used in this homework assignment:
+```{r libraries, echo=T, message=F}
+library(tidyverse)
+library(dplyr)
+library(nycflights13)
+library(rvest)
+```
+# 1.
+### Table 2
+```{r table2, echo=T}
+table2 %>%
+  spread(type,count) %>%
+  mutate(rate=cases/population *10000)
+```
+### Table 4a + Table 4b
+```{r table4ab,echo=T}
+table4a_gather <- gather(table4a,`1999`,`2000`,key="year",value="cases")
+table4b_gather <- gather(table4b,`1999`,`2000`,key="year",value="population")
+inner_join(table4a_gather,table4b_gather,by=c("country","year")) %>%
+  mutate(rate=cases/population *10000)
+```
+
+# 2.
+```{r,eval=F}
+table4a%>%gather(1999,2000,key="year",value="cases")
+```
+This code doesn't work because there are no quotations around the column names '1999' and '2000'
+
+# 3.
+### a.
+```{r,echo=T,warning=F}
+flights %>%
+  filter(!is.na(dep_time),!is.na(arr_time)) %>%
+  mutate(time = hour + minute/60,
+         month = as.factor(month)) %>%
+  ggplot(aes(x=time,group=month,color=month)) +
+  xlab("Time of Scheduled Departure") +
+  geom_freqpoly(bins=100)
+```
+
+### b.
+I checked the consistency of the departure delay calculations by manually calculating the delay and comparing it to the values in the table. I subtracted the scheduled departure time from the actual departure time and then checked if that value matched the departure delay value in the table:
+```{r,echo=T}
+flights %>%
+  filter(!is.na(dep_time),!is.na(arr_time)) %>%
+  mutate(dep_hour = dep_time %/% 100,
+         dep_minute = dep_time %% 100,
+         dep_delay_consistent = dep_delay==(dep_hour-hour)*60 + (dep_minute-minute)) %>%
+  select(dep_time,sched_dep_time,dep_delay,dep_delay_consistent) -> flights_delay_check
+
+head(flights_delay_check)
+
+# check if any calculation don't match
+any(flights_delay_check$dep_delay_consistent==FALSE)
+```
+Taking a closer look at which rows have inconsistent departure delay calculations reveals that the flights that were delayed until the next day are not captured by simply subtracting the scheduled departure time from the actual departure time. Technically, we cannot be sure that these flights are departing very late or leaving very early because we don't have any information on arrival day. However, it can be assumed that flights are more likely going to be delayed 8 hours to the next day and not leaving 8 hours early, for example. This issue can be fixed in the check like so:
+```{r,echo=T}
+flights %>%
+  filter(!is.na(dep_time),!is.na(arr_time)) %>%
+  mutate(dep_hour = dep_time %/% 100,
+         dep_minute = dep_time %% 100,
+         dep_delay_manual = ifelse((dep_hour-hour)*60 + (dep_minute-minute) > -100, #no flights leave this early
+                                   (dep_hour-hour)*60 + (dep_minute-minute),
+                                   (23-hour)*60+60-minute+(dep_hour*60)+dep_minute),
+         dep_delay_consistent = dep_delay==dep_delay_manual) %>%
+  select(dep_time,sched_dep_time,dep_delay,dep_delay_manual,dep_delay_consistent) -> flights_delay_check
+
+# check if any calculation don't match
+any(flights_delay_check$dep_delay_consistent==FALSE)
+```
+
+### c.
+
+```{r,echo=T}
+flights %>%
+  filter(!is.na(minute),!is.na(dep_delay)) %>%
+  mutate(early = ifelse(dep_delay < 0,1,0),
+         minute_bin = factor(case_when(minute<=10 ~ "0-10",
+                                       minute>10 & minute<=20 ~ "10-20",
+                                       minute>20 & minute<=30 ~ "20-30",
+                                       minute>30 & minute<=40 ~ "30-40",
+                                       minute>40 & minute<=50 ~ "40-50",
+                                       minute>50 ~ "50-60"))) %>%
+  group_by(minute_bin) %>%
+  summarise(early_prop = sum(early)/n()) %>%
+  ggplot(aes(x=minute_bin,y=early_prop,fill=minute_bin)) +
+  geom_bar(stat="identity") +
+  scale_y_continuous(limits = c(0,1)) +
+  labs(x="Minute Period of the Hour",
+       y="Proportion of Early Flights",
+       title="Early Flights by Departure Time within the Hour") +
+  guides(fill=F)
+
+```
+It seems as though the proportion of early flights compared to the total number of flights is not associated with leaving during a certain minute period of the hour.
+
+# 4.
+
+```{r,echo=T}
+
+
+webpage = read_html("https://geiselmed.dartmouth.edu/qbs/")
+
+h1_text = webpage %>% html_nodes('h1') %>% html_text()
+h1_text
+h2_text = webpage %>% html_nodes('h2') %>% html_text()
+h2_text
+
+p_text = webpage %>% html_nodes("p") %>% html_text(trim = T)
+p_text[2]
+
+ul_text = webpage %>% html_nodes('ul') %>% html_text(trim=T)
+ul_text[1]
+
+# pull program contact info into data frame
+emails_in_text <- grep("Email",p_text)
+contacts <- data.frame()
+
+for(i in 1:length(emails_in_text)){
+  contacts[i,1] = p_text[emails_in_text[i]-3]
+  contacts[i,2] = p_text[emails_in_text[i]-2]
+  contacts[i,3] = substr(p_text[emails_in_text[i]-1],8,22)
+  contacts[i,4] = substr(p_text[emails_in_text[i]],8,40)
+}
+colnames(contacts) <- c("Name","Title","Phone","Email")
+print(contacts)
+```
